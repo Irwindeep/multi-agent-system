@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import datetime
 from typing import Dict, Literal, Optional, Any
 from pydantic import BaseModel, Field, field_validator
 
@@ -14,6 +15,7 @@ class Commitment(BaseModel):
     reciprocal_obligation: bool = False
     priority: int = 0
     status: Literal["proposed", "accepted", "fulfilled", "violated"] = "proposed"
+    timestamp: datetime = datetime.now()
 
     class Config:
         use_enum_values = True
@@ -26,6 +28,7 @@ class TrafficState(BaseModel):
         default_factory=dict
     )  # {agent_id: count}
     congestion_risk: float = 0.0  # normalized 0.0 - 1.0
+    timestamp: datetime = datetime.now()
 
     @field_validator("congestion_risk")
     def clamp_risk(cls, v):
@@ -64,6 +67,7 @@ class ViolationReportContent(BaseModel):
     agent_id: str
     violation_count: int
     details: Optional[str] = None
+    timestamp: datetime = datetime.now()
 
 
 class Structure(BaseModel):
@@ -75,9 +79,6 @@ class Structure(BaseModel):
     """
 
     message_type: MessageType
-    sender: str
-    recipient: str
-    # flexible top-level convenience map for any extra fields not captured below
     extra: Dict[str, Any] = Field(default_factory=dict)
 
     # typed payloads (only a subset will be populated depending on message_type)
@@ -91,6 +92,8 @@ class Structure(BaseModel):
 
     # violation reporting
     violation_report: Optional[ViolationReportContent] = None
+
+    created_at: datetime = datetime.now()
 
     class Config:
         use_enum_values = True

@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from autogen_agentchat.agents import BaseChatAgent
@@ -6,7 +5,8 @@ from autogen_agentchat.base import Response
 from autogen_agentchat.messages import BaseChatMessage, StructuredMessage
 from autogen_core import CancellationToken
 
-from typing import Any, Mapping, Sequence, Optional
+from typing import Any, Mapping, Sequence
+from .utils.config import SystemConfig
 from .utils.message_structure import Structure
 from .utils.enums import MessageType
 from .utils.message_broker import Message, MessageBroker
@@ -27,15 +27,13 @@ class BaseAgent(BaseChatAgent):
         description: str,
         message_broker: MessageBroker,
         logger: logging.Logger,
-        config: Optional[Any] = None,
+        config: SystemConfig,
     ) -> None:
         super(BaseAgent, self).__init__(name, description)
 
         self.message_broker = message_broker
         self.logger = logger
         self.config = config
-
-        self._running_task: Optional[asyncio.Task] = None
 
         # is any state info needs to be stored in subclasses
         self.state = {}
@@ -62,9 +60,7 @@ class BaseAgent(BaseChatAgent):
         except Exception as e:
             self.logger.exception(f"Error while handling message broker queue: {e}")
 
-        content = Structure(
-            message_type=MessageType.RECEIVED, sender=self.name, recipient="BROADCAST"
-        )
+        content = Structure(message_type=MessageType.RECEIVED)
         reply = StructuredMessage(content=content, source=self.name)
         return Response(chat_message=reply)
 

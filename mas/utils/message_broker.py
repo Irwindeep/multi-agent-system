@@ -1,15 +1,17 @@
 import queue
 import threading
 
-from autogen_agentchat.messages import BaseChatMessage
+from autogen_agentchat.messages import StructuredMessage
 from collections import defaultdict
 from typing import List, NamedTuple
+
+from .message_structure import Structure
 
 
 class Message(NamedTuple):
     sender: str
     receiver: str
-    content: BaseChatMessage
+    content: StructuredMessage[Structure]
 
 
 class MessageBroker:
