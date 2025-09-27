@@ -10,7 +10,7 @@ from autogen_core import CancellationToken
 from typing import Any, Mapping, Sequence, Optional
 from utils.message_structure import Structure
 from utils.enums import MessageType
-from utils.message_broker import MessageBroker
+from utils.message_broker import Message, MessageBroker
 
 
 class BaseAgent(BaseChatAgent):
@@ -53,11 +53,10 @@ class BaseAgent(BaseChatAgent):
         messages: Sequence[BaseChatMessage],
         cancellation_token: CancellationToken,
     ) -> Response:
-        if messages:
-            for message in messages:
-                self.logger.debug(
-                    f"[{self.name}] on_messages incoming: {repr(message)}, cancellation_token: {cancellation_token}"
-                )
+        for message in messages:
+            self.logger.debug(
+                f"[{self.name}] on_messages incoming: {repr(message)}, cancellation_token: {cancellation_token}"
+            )
 
         try:
             self._process_message_queue()
@@ -83,5 +82,22 @@ class BaseAgent(BaseChatAgent):
         loaded_state = dict(state or {})
         self.state = loaded_state.get("state", {})
 
+    # broker method handling should be defined in the subclass
+    def handle_broker_message(self, message: Message) -> None:
+        raise NotImplementedError(
+            f"Method `handle_broker_message` not implemented for {type(self).__name__}\nMessage {message} not handled"
+        )
+
     def _process_message_queue(self) -> None:
-        raise NotImplementedError("To Be implemented")
+        messages = self.message_broker.get_messages(self.name)
+        if not messages:
+            return
+
+        for message in messages:
+            self.handle_broker_message(message)
+
+    def send_message(self, message: StructuredMessage, receiver: str) -> None:
+        # use receiver="BROADCAST" for broadcast message
+
+        broker_message = Message(sender=self.name, receiver=receiver, content=message)
+        self.message_broker.send_message(broker_message)
