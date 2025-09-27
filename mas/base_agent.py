@@ -8,9 +8,9 @@ from autogen_agentchat.messages import BaseChatMessage, StructuredMessage
 from autogen_core import CancellationToken
 
 from typing import Any, Mapping, Sequence, Optional
-from utils.message_structure import Structure
-from utils.enums import MessageType
-from utils.message_broker import Message, MessageBroker
+from .utils.message_structure import Structure
+from .utils.enums import MessageType
+from .utils.message_broker import Message, MessageBroker
 
 
 class BaseAgent(BaseChatAgent):

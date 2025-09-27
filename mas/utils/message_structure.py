@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Dict, Literal, Optional, Any
 from pydantic import BaseModel, Field, field_validator
 
-from enums import MessageType, CommitmentType
+from .enums import MessageType, CommitmentType
 
 
 class Commitment(BaseModel):
@@ -94,8 +94,8 @@ class Structure(BaseModel):
 
     class Config:
         use_enum_values = True
-        allow_population_by_field_name = True
-        schema_extra = {
+        validate_by_name = True
+        json_schema_extra = {
             "example": {
                 "message_type": "COMMITMENT_PROPOSAL",
                 "sender": "C1",
