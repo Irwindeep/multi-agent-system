@@ -8,6 +8,7 @@ import time
 import signal
 import sys  # needed to exit the process
 
+
 class SimulationGUI:
     def __init__(self, root):
         self.root = root
@@ -15,7 +16,7 @@ class SimulationGUI:
 
         # Matplotlib figure for congestion risk
         self.fig, self.ax = plt.subplots(figsize=(6, 4))
-        self.line, = self.ax.plot([], [], marker='o', color='blue')
+        (self.line,) = self.ax.plot([], [], marker="o", color="blue")
         self.ax.set_xlim(0, 10)
         self.ax.set_ylim(0, 1)
         self.ax.set_xlabel("Round")
@@ -29,7 +30,9 @@ class SimulationGUI:
         # Table for exit slots
         self.table_frame = tk.Frame(root)
         self.table_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        self.tree = ttk.Treeview(self.table_frame, columns=("Classroom", "Exit Slots"), show="headings")
+        self.tree = ttk.Treeview(
+            self.table_frame, columns=("Classroom", "Exit Slots"), show="headings"
+        )
         self.tree.heading("Classroom", text="Classroom")
         self.tree.heading("Exit Slots", text="Exit Slots")
         self.tree.pack(fill=tk.BOTH, expand=True)
@@ -39,11 +42,17 @@ class SimulationGUI:
         self.button_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
         # Start simulation button
-        self.start_button = tk.Button(self.button_frame, text="Start Simulation", command=self.start_simulation_thread)
+        self.start_button = tk.Button(
+            self.button_frame,
+            text="Start Simulation",
+            command=self.start_simulation_thread,
+        )
         self.start_button.pack(side=tk.LEFT, padx=5, pady=5)
 
         # Exit simulation button
-        self.exit_button = tk.Button(self.button_frame, text="Exit Simulation", command=self.exit_simulation)
+        self.exit_button = tk.Button(
+            self.button_frame, text="Exit Simulation", command=self.exit_simulation
+        )
         self.exit_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
         self.congestion_history = []
@@ -62,14 +71,16 @@ class SimulationGUI:
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        for i, round_info in enumerate(rounds_data):
+        for round_info in rounds_data:
             if not self.simulation_running:
                 break  # stop immediately if exit pressed
 
             self.congestion_history.append(round_info["congestion"])
 
             # Update plot
-            self.line.set_data(range(len(self.congestion_history)), self.congestion_history)
+            self.line.set_data(
+                range(len(self.congestion_history)), self.congestion_history
+            )
             self.ax.set_xlim(0, max(10, len(self.congestion_history)))
             self.canvas.draw()
 
@@ -88,10 +99,12 @@ class SimulationGUI:
         print("Exiting simulation...")
         sys.exit(0)  # terminate Python process completely
 
+
 # Handle Ctrl+C in terminal
 def handler(sig, frame):
     print("Exiting simulation (Ctrl+C)...")
     sys.exit(0)
+
 
 signal.signal(signal.SIGINT, handler)
 
