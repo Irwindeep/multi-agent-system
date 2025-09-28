@@ -74,55 +74,68 @@ class BottleneckAgent(BaseAgent):
                     f"[{self.name}] Agent {vr.agent_id} exceeded violation limit ({vr.violation_count} > {limit})"
                 )
 
-    def handle_traffic_update(
-        self, structured_msg: StructuredMessage[Structure]
-    ) -> None:
+    def handle_traffic_update(self, structured_msg: StructuredMessage[Structure]) -> None:
+        """Handle traffic state updates from simulation"""
         if structured_msg.content.traffic_state:
             self.traffic_state = structured_msg.content.traffic_state
+            self.logger.info(f"[{self.name}] Received traffic update: {self.traffic_state.estimated_students}")
         else:
+            # Handle alternative format
             est = structured_msg.content.extra.get("estimated_students", {})
             if isinstance(est, dict):
                 self.traffic_state.estimated_students = est
 
+        # Always recalculate risk and potentially start negotiation
         risk = self.calculate_congestion_risk()
-        self.logger.info(
-            f"[{self.name}] Updated traffic state. Congestion risk={risk:.2f}"
-        )
         self.maybe_initiate_negotiation()
 
     def calculate_congestion_risk(self) -> float:
+        """Calculate congestion risk based on current student estimates"""
         total_students = sum(self.traffic_state.estimated_students.values())
         if total_students == 0:
             self.traffic_state.congestion_risk = 0.0
             return 0.0
 
-        capacity_per_batch = getattr(self.config, "bottleneck_capacity", 0) * getattr(
-            self.config, "clearance_time", 1
-        )
-
-        if capacity_per_batch <= 0:
-            risk = 1.0
-        else:
-            intervals_needed = total_students / float(capacity_per_batch)
-            risk = min(intervals_needed / 2.0, 1.0)
+        # More realistic calculation
+        bottleneck_capacity_per_interval = self.config.bottleneck_capacity
+        clearance_time = self.config.clearance_time
+        
+        # How many intervals needed to clear all students
+        intervals_needed = (total_students + bottleneck_capacity_per_interval - 1) // bottleneck_capacity_per_interval
+        
+        # Risk increases with more intervals needed
+        # Risk = 1.0 if we need more than 6 intervals (12+ minutes)
+        max_acceptable_intervals = 6
+        risk = min(intervals_needed / max_acceptable_intervals, 1.0)
+        
         self.traffic_state.congestion_risk = risk
+        
+        self.logger.info(f"[{self.name}] Risk calculation: {total_students} students, {intervals_needed} intervals needed, risk={risk:.2f}")
+        
         return risk
 
     def maybe_initiate_negotiation(self) -> None:
+        """Decide whether to initiate negotiation based on congestion risk"""
         risk = self.traffic_state.congestion_risk
-        if risk >= 1.0:
-            self.logger.info(
-                f"[{self.name}] HIGH congestion risk detected ({risk:.2f}). Initiating negotiation round."
-            )
+        total_students = sum(self.traffic_state.estimated_students.values())
+        
+        # Lower the threshold for starting negotiations
+        if risk >= 0.4 or total_students > 80:  # Start earlier
+            self.logger.info(f"[{self.name}] INITIATING negotiation - Risk: {risk:.2f}, Students: {total_students}")
             self.start_negotiation_round()
-        elif risk > 0.6:
-            self.logger.info(
-                f"{self.name}] MODERATE congestion risk ({risk:.2f}). Monitoring closely."
-            )
+        elif risk > 0.25:
+            self.logger.info(f"[{self.name}] Monitoring situation - Risk: {risk:.2f}, Students: {total_students}")
+        else:
+            self.logger.info(f"[{self.name}] Low congestion risk - Risk: {risk:.2f}, Students: {total_students}")
+
 
     def start_negotiation_round(self) -> None:
+        """Start a new negotiation round"""
         negotiation_id = str(uuid.uuid4())
         self.active_negotiations[negotiation_id] = {"accepted_commitments": []}
+
+        self.logger.info(f"[{self.name}] STARTING negotiation round {negotiation_id[:8]}")
+        self.logger.info(f"[{self.name}] Current situation: {dict(self.traffic_state.estimated_students)}")
 
         negotiation_struct = Structure(
             message_type=MessageType.NEGOTIATION_START,
@@ -133,7 +146,4 @@ class BottleneckAgent(BaseAgent):
         self.send_message(
             StructuredMessage(content=negotiation_struct, source=self.name),
             "BROADCAST",
-        )
-        self.logger.info(
-            f"[{self.name}] Started negotiation round {negotiation_id[:8]}"
         )

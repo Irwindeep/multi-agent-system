@@ -15,12 +15,10 @@ from autogen_agentchat.messages import StructuredMessage
 def setup_logger():
     logger = logging.getLogger("MAS-Simulation")
     logger.setLevel(logging.INFO)
+    logger.handlers.clear()
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    ch.setFormatter(formatter)
+    ch.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logger.addHandler(ch)
     return logger
 
@@ -29,235 +27,137 @@ def main():
     logger = setup_logger()
     broker = MessageBroker()
 
-    # Configuration
     config = SystemConfig(
-        bottleneck_capacity=15,  # students per batch
-        clearance_time=2,  # minutes per batch
+        bottleneck_capacity=12,
+        clearance_time=2,
         violation_limit=3,
-        max_adjustment=10,
+        max_adjustment=8,
     )
 
-    # Initialize agents
-    bottleneck = BottleneckAgent(
-        "Bottleneck", "Traffic monitor", broker, logger, config
-    )
+    bottleneck = BottleneckAgent("Bottleneck", "Traffic monitor", broker, logger, config)
     classrooms = [
-        ClassroomAgent(
-            "ClassroomA",
-            "AI Lecture",
-            broker,
-            logger,
-            attendance=random.randint(20, 60),
-            prof_flexibility=0.8,
-            config=config,
-        ),
-        ClassroomAgent(
-            "ClassroomB",
-            "Math Lecture",
-            broker,
-            logger,
-            attendance=random.randint(20, 60),
-            prof_flexibility=0.6,
-            config=config,
-        ),
-        ClassroomAgent(
-            "ClassroomC",
-            "Physics Lecture",
-            broker,
-            logger,
-            attendance=random.randint(20, 60),
-            prof_flexibility=0.9,
-            config=config,
-        ),
+        ClassroomAgent("ClassroomA", "AI Lecture", broker, logger, attendance=50, prof_flexibility=0.8, config=config),
+        ClassroomAgent("ClassroomB", "Math Lecture", broker, logger, attendance=45, prof_flexibility=0.7, config=config),
+        ClassroomAgent("ClassroomC", "Physics Lecture", broker, logger, attendance=40, prof_flexibility=0.9, config=config),
+        ClassroomAgent("ClassroomD", "Chemistry Lab", broker, logger, attendance=35, prof_flexibility=0.6, config=config),
     ]
-    agents = [bottleneck] + classrooms
 
-    # Simulation rounds
-    for round_num in range(1, 6):
-        logger.info(f"\n=== Simulation Round {round_num} ===")
+    logger.info("=== Multi-Agent Traffic Coordination System ===")
+    logger.info(f"Bottleneck capacity: {config.bottleneck_capacity} students/batch")
 
-        #    Fluctuate classroom attendance
-        for c in classrooms:
-            fluctuation = random.randint(-5, 5)
-            c.state.current_attendance = max(
-                5, c.state.current_attendance + fluctuation
-            )
+    total_students = sum(c.state.current_attendance for c in classrooms)
+    batches_needed = (total_students + config.bottleneck_capacity - 1) // config.bottleneck_capacity
+    time_needed = batches_needed * config.clearance_time
+    logger.info(f"Initial situation: {total_students} total students")
+    logger.info(f"Without coordination: {batches_needed} batches needed, {time_needed} minutes total")
 
-        #  Apply commitment effects: reduce students in traffic if commitment fulfilled
-        effective_students = 0
+    for c in classrooms:
+        logger.info(f"  {c.name}: {c.state.current_attendance} students (flexibility: {c.state.prof_flexibility})")
+
+    for episode in range(1, 4):
+        logger.info(f"\nEPISODE {episode}")
+
+        if episode > 1:
+            for c in classrooms:
+                change = random.randint(-3, 5)
+                c.state.current_attendance = max(15, c.state.current_attendance + change)
+                logger.info(f"{c.name}: {c.state.current_attendance} students")
+
         classroom_attendance = {}
+        total_effective = 0
         for c in classrooms:
-            committed_reduction = sum(
-                cm.adjustment_minutes
-                for cm in c.commitment_history
-                if cm.status == "fulfilled"
-            )
-            # Each adjustment minute reduces 1 student for simplicity
-            effective_count = max(0, c.state.current_attendance - committed_reduction)
+            reduction = 0
+            for commitment in c.commitment_history:
+                if commitment.status == "fulfilled" and commitment.commitment_type == "EARLY_EXIT":
+                    reduction += commitment.adjustment_minutes // 2
+            effective_count = max(10, c.state.current_attendance - reduction)
             classroom_attendance[c.name] = effective_count
-            effective_students += effective_count
+            total_effective += effective_count
 
-        # Compute congestion risk dynamically
-        max_students_possible = sum([60 for _ in classrooms])  # realistic max per class
-        congestion_risk = min(effective_students / max_students_possible, 1.0)
-
-        #  Update traffic state
+        congestion_risk = min(total_effective / 120, 1.0)
         traffic_state = TrafficState(
-            current_flow=effective_students,
-            capacity_remaining=max(0, max_students_possible - effective_students),
+            current_flow=total_effective,
+            capacity_remaining=max(0, 120 - total_effective),
             estimated_students=classroom_attendance,
             congestion_risk=congestion_risk,
         )
+        logger.info(f"Congestion risk: {congestion_risk:.2f}")
 
-        update_struct = Structure(
-            message_type=MessageType.TRAFFIC_UPDATE, traffic_state=traffic_state
-        )
+        update_struct = Structure(message_type=MessageType.TRAFFIC_UPDATE, traffic_state=traffic_state)
         update_msg = StructuredMessage(content=update_struct, source="Simulation")
-        broker.send_message(
-            Message(sender="Simulation", receiver="Bottleneck", content=update_msg)
-        )
+        broker.send_message(Message(sender="Simulation", receiver="Bottleneck", content=update_msg))
 
-        #  Process messages
-        bottleneck._process_message_queue()
+        logger.info("Negotiation phase started")
+        commitments_before = sum(len(c.commitment_history) for c in classrooms)
+
         for _ in range(5):
-            for agent in agents:
-                agent._process_message_queue()
+            bottleneck._process_message_queue()
+            for classroom in classrooms:
+                classroom._process_message_queue()
 
-        #  Generate dynamic exit slots per classroom
+        commitments_after = sum(len(c.commitment_history) for c in classrooms)
+        new_commitments = commitments_after - commitments_before
+        logger.info(f"Negotiation complete: {new_commitments} new commitments")
+
+        logger.info("Commitment results:")
         for c in classrooms:
-            total_students = classroom_attendance[c.name]
-            batch_size = config.bottleneck_capacity
-            base_time = datetime.now()
-            exit_slots = []
-            for i in range(0, total_students, batch_size):
-                exit_time = base_time + timedelta(
-                    minutes=(i // batch_size) * config.clearance_time
-                )
-                exit_slots.append(exit_time)
-            c.state.exit_slots = exit_slots
+            recent_commitments = [cm for cm in c.commitment_history if cm.status in ["accepted", "proposed"]]
+            if recent_commitments:
+                for cm in recent_commitments[-2:]:
+                    logger.info(f"{c.name}: {cm.commitment_type} ({cm.adjustment_minutes} min) - {cm.status}")
+            else:
+                logger.info(f"{c.name}: No commitments")
 
-        #  Log violations
+        logger.info("Final exit schedule:")
+        base_time = datetime.now().replace(hour=12, minute=0, second=0)
         for c in classrooms:
-            violations = [cm for cm in c.commitment_history if cm.status == "violated"]
-            if len(violations) >= config.violation_limit:
-                logger.warning(
-                    f"{c.name} exceeded violation limit ({len(violations)} violations)"
-                )
+            time_adjustment = 0
+            for cm in c.commitment_history:
+                if cm.status == "accepted":
+                    if cm.commitment_type == "EARLY_EXIT":
+                        time_adjustment -= cm.adjustment_minutes
+                        cm.status = "fulfilled"
+                    elif cm.commitment_type == "LATE_EXIT":
+                        time_adjustment += cm.adjustment_minutes
+                        cm.status = "fulfilled"
 
-        #  Log classroom exit slots
+            students = classroom_attendance[c.name]
+            adjusted_end = base_time + timedelta(minutes=time_adjustment)
+            exit_times = [
+                (adjusted_end + timedelta(minutes=(i // config.bottleneck_capacity) * config.clearance_time)).strftime("%H:%M")
+                for i in range(0, students, config.bottleneck_capacity)
+            ]
+            logger.info(f"{c.name}: {', '.join(exit_times)} ({time_adjustment:+d} min) - {students} students")
+
+        original_time = (total_effective + config.bottleneck_capacity - 1) // config.bottleneck_capacity * config.clearance_time
+        all_exit_times = []
         for c in classrooms:
-            slots = [t.strftime("%H:%M") for t in c.state.exit_slots]
-            logger.info(f"{c.name} exit slots: {slots}")
+            time_adj = sum(cm.adjustment_minutes for cm in c.commitment_history if cm.status == "fulfilled" and cm.commitment_type == "EARLY_EXIT")
+            time_adj -= sum(cm.adjustment_minutes for cm in c.commitment_history if cm.status == "fulfilled" and cm.commitment_type == "LATE_EXIT")
+            students = classroom_attendance[c.name]
+            batches = (students + config.bottleneck_capacity - 1) // config.bottleneck_capacity
+            final_time = batches * config.clearance_time - time_adj
+            all_exit_times.append(final_time)
 
-        logger.info(f"Current congestion risk: {congestion_risk:.2f}")
+        actual_time = max(all_exit_times)
+        improvement = max(0, original_time - actual_time)
 
-        time.sleep(1)  # mimic real-time
+        logger.info(f"Episode {episode} summary:")
+        logger.info(f"Students: {total_effective}, Risk: {congestion_risk:.2f}")
+        logger.info(f"Time without coordination: {original_time} minutes")
+        logger.info(f"Time with coordination: {actual_time} minutes")
+        logger.info(f"Improvement: {improvement} minutes saved")
+        logger.info(f"New commitments: {new_commitments}")
 
-    logger.info("Simulation finished.")
+    logger.info("Final statistics:")
+    for c in classrooms:
+        total_commitments = len(c.commitment_history)
+        fulfilled = len([cm for cm in c.commitment_history if cm.status == "fulfilled"])
+        violated = len([cm for cm in c.commitment_history if cm.status == "violated"])
+        reliability = (fulfilled / (total_commitments or 1)) * 100
+        logger.info(f"{c.name}: commitments={total_commitments}, fulfilled={fulfilled}, violated={violated}, reliability={reliability:.1f}%")
 
-
-def run_simulation(num_rounds=5, sleep_time=0):
-    """
-    Runs the simulation and returns a list of rounds:
-    each round = {"congestion": float, "exit_slots": {"ClassroomA": [...], ...}}
-    """
-    logger = setup_logger()
-    broker = MessageBroker()
-    config = SystemConfig(
-        bottleneck_capacity=15,
-        clearance_time=2,
-        violation_limit=3,
-        max_adjustment=10,
-    )
-
-    bottleneck = BottleneckAgent(
-        "Bottleneck", "Traffic monitor", broker, logger, config
-    )
-    classrooms = [
-        ClassroomAgent(
-            "ClassroomA",
-            "AI Lecture",
-            broker,
-            logger,
-            attendance=50,
-            prof_flexibility=0.8,
-            config=config,
-        ),
-        ClassroomAgent(
-            "ClassroomB",
-            "Math Lecture",
-            broker,
-            logger,
-            attendance=40,
-            prof_flexibility=0.6,
-            config=config,
-        ),
-        ClassroomAgent(
-            "ClassroomC",
-            "Physics Lecture",
-            broker,
-            logger,
-            attendance=45,
-            prof_flexibility=0.9,
-            config=config,
-        ),
-    ]
-    agents = [bottleneck] + classrooms
-
-    rounds_data = []
-
-    for _ in range(1, num_rounds + 1):
-        for c in classrooms:
-            fluctuation = random.randint(-5, 5)
-            c.state.current_attendance = max(
-                5, c.state.current_attendance + fluctuation
-            )
-
-        effective_students = 0
-        classroom_attendance = {}
-        for c in classrooms:
-            committed_reduction = sum(
-                cm.adjustment_minutes
-                for cm in c.commitment_history
-                if cm.status == "fulfilled"
-            )
-            effective_count = max(0, c.state.current_attendance - committed_reduction)
-            classroom_attendance[c.name] = effective_count
-            effective_students += effective_count
-
-        max_students_possible = sum([60 for _ in classrooms])
-        congestion_risk = min(effective_students / max_students_possible, 1.0)
-
-        # Generate dynamic exit slots per classroom
-        exit_slots_round = {}
-        base_time = datetime.now()
-        for c in classrooms:
-            total_students = classroom_attendance[c.name]
-            batch_size = config.bottleneck_capacity
-            exit_slots = []
-            for i in range(0, total_students, batch_size):
-                exit_time = base_time + timedelta(
-                    minutes=(i // batch_size) * config.clearance_time
-                )
-                exit_slots.append(exit_time.strftime("%H:%M"))
-            exit_slots_round[c.name] = exit_slots
-
-        rounds_data.append(
-            {"congestion": congestion_risk, "exit_slots": exit_slots_round}
-        )
-
-        # Process messages
-        bottleneck._process_message_queue()
-        for _ in range(5):
-            for agent in agents:
-                agent._process_message_queue()
-
-        if sleep_time > 0:
-            import time
-
-            time.sleep(sleep_time)
-
-    return rounds_data
+    logger.info("Simulation completed")
 
 
 if __name__ == "__main__":

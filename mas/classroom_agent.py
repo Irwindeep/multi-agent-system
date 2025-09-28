@@ -5,6 +5,14 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from autogen_agentchat.messages import StructuredMessage
+from .utils.message_structure import (
+    Commitment,
+    CommitmentProposalContent,
+    CommitmentResponseContent,
+    CommitmentBroadcastContent,  # <- ADD this line
+    Structure,
+    TrafficState,
+)
 
 from .base_agent import BaseAgent
 from .utils.enums import CommitmentType, MessageType
@@ -80,69 +88,116 @@ class ClassroomAgent(BaseAgent):
     def generate_commitment_proposals(
         self, traffic_state: TrafficState, negotiation_id: str
     ) -> List[Message]:
+        """Generate commitment proposals based on current traffic situation"""
         proposals = []
-
-        def create_proposal(commitment: Commitment) -> None:
-            nonlocal proposals
-
-            commitment_structure = Structure(
-                message_type=MessageType.COMMITMENT_PROPOSAL,
-                commitment_proposal=CommitmentProposalContent(
-                    commitment=commitment, negotiation_id=negotiation_id
-                ),
-            )
-            content = StructuredMessage(content=commitment_structure, source=self.name)
-
-            proposal = Message(sender=self.name, receiver="BROADCAST", content=content)
-            proposals.append(proposal)
-
-        if traffic_state.congestion_risk < 0.5:
+        
+        # Don't propose if congestion risk is low
+        if traffic_state.congestion_risk < 0.3:
             return proposals
 
         total_students = sum(traffic_state.estimated_students.values())
         if total_students == 0:
             return proposals
 
-        our_proportion = self.state.current_attendance / total_students
+        our_students = traffic_state.estimated_students.get(self.name, 0)
+        our_proportion = our_students / total_students if total_students > 0 else 0
 
-        if our_proportion < 0.25 and traffic_state.congestion_risk > 0.6:
-            for adjustment in [-2, -4, -6]:
-                if self.get_adjustment_score(adjustment) > 0.6:
+        self.logger.info(f"[{self.name}] Generating proposals - Risk: {traffic_state.congestion_risk:.2f}, Our students: {our_students}")
+
+        # Strategy 1: If we have few students and high risk, offer to exit early
+        if our_proportion < 0.4 and traffic_state.congestion_risk > 0.5:
+            for adjustment in [2, 4, 6]:
+                if self.get_adjustment_score(-adjustment) > 0.5:
                     commitment = Commitment(
                         id=str(uuid.uuid4()),
                         proposer=self.name,
+                        accepter="OPEN",
                         commitment_type=CommitmentType.EARLY_EXIT,
-                        adjustment_minutes=abs(adjustment),
+                        adjustment_minutes=adjustment,
                         reciprocal_obligation=True,
                         priority=1,
                     )
-                    create_proposal(commitment)
-                    break
+                    
+                    proposal_content = CommitmentProposalContent(
+                        commitment=commitment,
+                        negotiation_id=negotiation_id,
+                        student_count=our_students,
+                        reason=f"Offering to exit {adjustment} min early to reduce congestion"
+                    )
+                    
+                    commitment_structure = Structure(
+                        message_type=MessageType.COMMITMENT_PROPOSAL,
+                        commitment_proposal=proposal_content,
+                    )
+                    content = StructuredMessage(content=commitment_structure, source=self.name)
+                    
+                    proposal = Message(sender=self.name, receiver="BROADCAST", content=content)
+                    proposals.append(proposal)
+                    
+                    self.logger.info(f"[{self.name}] Proposing EARLY_EXIT: {adjustment} minutes")
+                    break  # Only propose one early exit option
 
-        if self.obligation_credits < 0 and traffic_state.congestion_risk > 0.5:
-            adjustment = min(4, abs(self.obligation_credits) * 2)
-            if self.get_adjustment_score(-adjustment) > 0.5:
+        # Strategy 2: If we have many students, offer staggered exit
+        elif our_proportion > 0.4 and our_students > 30:
+            commitment = Commitment(
+                id=str(uuid.uuid4()),
+                proposer=self.name,
+                accepter="OPEN",
+                commitment_type=CommitmentType.STAGGERED_EXIT,
+                adjustment_minutes=0,  # No time change, just batching
+                reciprocal_obligation=False,
+                priority=2,
+            )
+            
+            proposal_content = CommitmentProposalContent(
+                commitment=commitment,
+                negotiation_id=negotiation_id,
+                student_count=our_students,
+                reason=f"Offering staggered exit for {our_students} students"
+            )
+            
+            commitment_structure = Structure(
+                message_type=MessageType.COMMITMENT_PROPOSAL,
+                commitment_proposal=proposal_content,
+            )
+            content = StructuredMessage(content=commitment_structure, source=self.name)
+            
+            proposal = Message(sender=self.name, receiver="BROADCAST", content=content)
+            proposals.append(proposal)
+            
+            self.logger.info(f"[{self.name}] Proposing STAGGERED_EXIT for {our_students} students")
+
+        # Strategy 3: If we owe obligations, offer to extend
+        if self.obligation_credits < 0:  # We owe favors
+            extend_minutes = min(4, abs(self.obligation_credits) * 2)
+            if self.get_adjustment_score(extend_minutes) > 0.4:
                 commitment = Commitment(
                     id=str(uuid.uuid4()),
                     proposer=self.name,
-                    commitment_type=CommitmentType.EARLY_EXIT,
-                    adjustment_minutes=adjustment,
-                    reciprocal_obligation=False,
-                    priority=2,
-                )
-                create_proposal(commitment)
-
-        if our_proportion > 0.3 and self.state.current_attendance > 40:
-            if self.get_adjustment_score(0) > 0.7:
-                commitment = Commitment(
-                    id=str(uuid.uuid4()),
-                    proposer=self.name,
-                    commitment_type=CommitmentType.STAGGERED_EXIT,
-                    adjustment_minutes=0,
+                    accepter="OPEN",
+                    commitment_type=CommitmentType.LATE_EXIT,
+                    adjustment_minutes=extend_minutes,
                     reciprocal_obligation=False,
                     priority=3,
                 )
-                create_proposal(commitment)
+                
+                proposal_content = CommitmentProposalContent(
+                    commitment=commitment,
+                    negotiation_id=negotiation_id,
+                    student_count=our_students,
+                    reason=f"Fulfilling obligation by extending {extend_minutes} minutes"
+                )
+                
+                commitment_structure = Structure(
+                    message_type=MessageType.COMMITMENT_PROPOSAL,
+                    commitment_proposal=proposal_content,
+                )
+                content = StructuredMessage(content=commitment_structure, source=self.name)
+                
+                proposal = Message(sender=self.name, receiver="BROADCAST", content=content)
+                proposals.append(proposal)
+                
+                self.logger.info(f"[{self.name}] Proposing LATE_EXIT: {extend_minutes} minutes (obligation)")
 
         return proposals
 
@@ -180,33 +235,72 @@ class ClassroomAgent(BaseAgent):
     def _evaluate_commitment_proposal(
         self, message: StructuredMessage[Structure]
     ) -> Optional[Message]:
+        """Evaluate received commitment proposal and decide whether to accept"""
         proposal = message.content.commitment_proposal
         if proposal is None:
-            raise RuntimeError("Cannot Evaluate NoneType Proposal")
+            return None
 
         commitment = proposal.commitment
         proposer = commitment.proposer
+        
+        # Don't evaluate our own proposals
         if proposer == self.name:
             return None
 
+        self.logger.info(f"[{self.name}] Evaluating proposal from {proposer}: {commitment.commitment_type} ({commitment.adjustment_minutes} min)")
+
+        # Calculate benefit score
         trust_score = self.trust_scores[proposer]
         benefit = self._compute_proposal_benefit(commitment)
-        obligation_cost = -0.2 if commitment.reciprocal_obligation else 0.0
-        priority_bonus = 0.1 * commitment.priority
+        obligation_cost = -0.3 if commitment.reciprocal_obligation else 0.0
+        
+        # Consider our current situation
+        our_students = self.state.current_attendance
+        situation_bonus = 0.0
+        
+        if commitment.commitment_type == CommitmentType.EARLY_EXIT:
+            # Accept if we have many students and they're reducing load
+            if our_students > 35:
+                situation_bonus = 0.4
+        elif commitment.commitment_type == CommitmentType.LATE_EXIT:
+            # Accept if we have few students
+            if our_students < 25:
+                situation_bonus = 0.3
 
-        score = trust_score + benefit + obligation_cost + priority_bonus
+        total_score = trust_score + benefit + obligation_cost + situation_bonus
+        
+        self.logger.info(f"[{self.name}] Evaluation score: {total_score:.2f} (trust:{trust_score:.2f}, benefit:{benefit:.2f}, obligation:{obligation_cost:.2f}, situation:{situation_bonus:.2f})")
 
-        if score > 0.5:
-            commitment.accepter = self.name
-            commitment.status = "accepted"
-
+        # Accept if score is good enough
+        if total_score > 0.6:
+            # Create acceptance
+            accepted_commitment = Commitment(
+                id=commitment.id,
+                proposer=commitment.proposer,
+                accepter=self.name,
+                commitment_type=commitment.commitment_type,
+                adjustment_minutes=commitment.adjustment_minutes,
+                reciprocal_obligation=commitment.reciprocal_obligation,
+                priority=commitment.priority,
+                status="accepted"
+            )
+            
+            # Add to our pending commitments
+            self.pending_commitments.append(accepted_commitment)
+            
+            # Update obligation credits
+            if commitment.reciprocal_obligation:
+                self.obligation_credits += 1  # We now owe a favor
+            
             commitment_response = CommitmentResponseContent(
-                commitment=commitment,
+                commitment=accepted_commitment,
                 decision="accept",
-                decision_score=score,
+                decision_score=total_score,
                 negotiation_id=message.content.negotiation_id,
                 accepter_students=self.state.current_attendance,
+                acceptance_reason=f"Beneficial arrangement (score: {total_score:.2f})"
             )
+            
             content = Structure(
                 message_type=MessageType.COMMITMENT_RESPONSE,
                 commitment_response=commitment_response,
@@ -215,10 +309,13 @@ class ClassroomAgent(BaseAgent):
             response = Message(
                 sender=self.name, receiver=proposer, content=response_content
             )
+            
+            self.logger.info(f"[{self.name}] ACCEPTING proposal from {proposer}")
             return response
-
-        return None
-
+        else:
+            self.logger.info(f"[{self.name}] REJECTING proposal from {proposer} (score too low)")
+            return None
+    
     def _compute_proposal_benefit(self, commitment: Commitment) -> float:
         benefit = 0.0
 
@@ -240,23 +337,30 @@ class ClassroomAgent(BaseAgent):
         return benefit
 
     def _handle_negotiation_start(self, message: Message) -> None:
+        """Handle start of negotiation round"""
         structured_message = message.content
         content = structured_message.content
 
         if content.negotiation_id is None or content.traffic_state is None:
-            raise RuntimeError(
-                "Cannot handle Negotiation Start with NoneType NegotiationID or Traffic State"
-            )
-        negotiation_id = content.negotiation_id
+            return
 
+        negotiation_id = content.negotiation_id
+        traffic_state = content.traffic_state
+
+        self.logger.info(f"[{self.name}] Starting negotiation {negotiation_id[:8]} - Risk: {traffic_state.congestion_risk:.2f}")
+        
         self.current_negotiation = negotiation_id
         self.received_proposals = []
 
-        traffic_state = content.traffic_state
+        # Generate our proposals
         proposals = self.generate_commitment_proposals(traffic_state, negotiation_id)
 
+        # Send all proposals
         for proposal in proposals:
             self.message_broker.send_message(proposal)
+
+        if not proposals:
+            self.logger.info(f"[{self.name}] No proposals to make this round")
 
     def _handle_commitment_proposal(self, message: Message) -> None:
         self.received_proposals.append(message)
@@ -267,17 +371,48 @@ class ClassroomAgent(BaseAgent):
             self.message_broker.send_message(response)
 
     def _handle_commitment_response(self, message: Message) -> None:
+        """Handle response to our commitment proposal"""
         structured_message = message.content
-        if structured_message.content.commitment_response is None:
-            raise RuntimeError("Cannot handle NoneType response")
-        if structured_message.content.commitment_response.decision != "accept":
+        response = structured_message.content.commitment_response
+        
+        if response is None:
             return
+            
+        if response.decision == "accept":
+            acceptor = structured_message.source
+            commitment = response.commitment
+            
+            self.logger.info(f"[{self.name}] SUCCESS! {acceptor} accepted our {commitment.commitment_type} proposal")
+            
+            # Add to our history
+            commitment.status = "accepted"
+            self.commitment_history.append(commitment)
+            
+            # Update obligation credits
+            if commitment.reciprocal_obligation:
+                self.obligation_credits -= 1  # They owe us now
+            
+            # Broadcast the successful deal
+            broadcast_content = CommitmentBroadcastContent(
+                proposer=self.name,
+                accepter=acceptor,
+                commitment=commitment,
+                negotiation_id=response.negotiation_id,
+                proposer_students=self.state.current_attendance,
+                accepter_students=response.accepter_students
+            )
+            
+            broadcast_struct = Structure(
+                message_type=MessageType.COMMITMENT_BROADCAST,
+                commitment_broadcast=broadcast_content,
+            )
+            broadcast_msg = StructuredMessage(content=broadcast_struct, source=self.name)
+            
+            self.send_message(broadcast_msg, "BROADCAST")
+            
+        else:
+            self.logger.info(f"[{self.name}] Proposal rejected by {structured_message.source}")
 
-        negotiation_id = structured_message.content.negotiation_id
-        acceptor = structured_message.source
-        self.logger.info(
-            f"[{self.name}] Commitment {negotiation_id} is accepted by {acceptor}"
-        )
 
     def update_trust_score(self, agent_name: str, fulfilled: bool) -> None:
         self.trust_scores[agent_name] += 0.1 * int(fulfilled) - 0.2 * (
